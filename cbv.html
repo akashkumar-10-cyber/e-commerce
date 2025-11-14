@@ -1,0 +1,403 @@
+// Simple demo data + localStorage-driven state
+const PRODUCTS = [
+  { id: 'p1', title: 'Wireless Headphones', price: 1999, img: 'https://via.placeholder.com/400x300?text=Headphones' },
+  { id: 'p2', title: 'Smart Watch', price: 2999, img: 'https://via.placeholder.com/400x300?text=Smart+Watch' },
+  { id: 'p3', title: 'Bluetooth Speaker', price: 1499, img: 'https://via.placeholder.com/400x300?text=Speaker' },
+  { id: 'p4', title: 'Portable Charger', price: 899, img: 'https://via.placeholder.com/400x300?text=Charger' },
+  { id: 'p5', title: 'Webcam', price: 2599, img: 'https://via.placeholder.com/400x300?text=Webcam' },
+];
+
+const LS = {
+  get(key){ try { return JSON.parse(localStorage.getItem(key)); } catch(e){return null} },
+  set(key,val){ localStorage.setItem(key, JSON.stringify(val)); }
+};
+
+// initialize app state on first run
+if (!LS.get('users')) LS.set('users', []);      // array {name,email,password}
+if (!LS.get('session')) LS.set('session', null); // email of logged in user
+if (!LS.get('cart')) LS.set('cart', []);       // array {email,items:[{productId,qty}]}
+if (!LS.get('wishlist')) LS.set('wishlist', []); // array {email,productId}
+if (!LS.get('orders')) LS.set('orders', []);    // array {email,order}
+if (!LS.get('reviews')) LS.set('reviews', []);  // array {name,text,date}
+if (!LS.get('reports')) LS.set('reports', []);  // array {name,email,type,msg,date}
+
+// -- utility
+const qs = sel => document.querySelector(sel);
+const qsa = sel => Array.from(document.querySelectorAll(sel));
+
+/* ---------- UI Rendering ---------- */
+
+function renderProducts(sort='default'){
+  let grid = qs('#productGrid');
+  grid.innerHTML = '';
+  let list = [...PRODUCTS];
+  if (sort === 'low') list.sort((a,b)=>a.price-b.price);
+  if (sort === 'high') list.sort((a,b)=>b.price-a.price);
+
+  list.forEach(p=>{
+    const col = document.createElement('div');
+    col.className = 'col-sm-6 col-md-4';
+    col.innerHTML = `
+      <div class="card h-100 shadow-sm">
+        <img src="${p.img}" class="product-img card-img-top" alt="${p.title}">
+        <div class="card-body d-flex flex-column">
+          <h5 class="card-title">${p.title}</h5>
+          <p class="card-text text-muted mb-2">₹${p.price.toLocaleString()}</p>
+          <div class="mt-auto d-flex gap-2">
+            <button class="btn btn-outline-primary btn-sm w-100 add-cart" data-id="${p.id}">
+              <i class="fa-solid fa-cart-plus"></i> Add to cart
+            </button>
+            <button class="btn btn-outline-danger btn-sm add-wish" data-id="${p.id}" title="Add to wishlist">
+              <i class="fa-regular fa-heart"></i>
+            </button>
+          </div>
+        </div>
+      </div>`;
+    grid.appendChild(col);
+  });
+
+  // attach handlers
+  qsa('.add-cart').forEach(b=>b.addEventListener('click', e=>{
+    const id = e.currentTarget.dataset.id;
+    addToCart(id);
+  }));
+  qsa('.add-wish').forEach(b=>b.addEventListener('click', e=>{
+    const id = e.currentTarget.dataset.id;
+    toggleWishlist(id);
+  }));
+}
+
+function updateCounts(){
+  const session = LS.get('session');
+  let cart = LS.get('cart') || [];
+  let wishlist = LS.get('wishlist') || [];
+
+  const email = session;
+  const userCart = email ? (cart.find(c=>c.email===email)?.items||[]) : [];
+  const count = userCart.reduce((s,i)=>s+i.qty,0);
+  qs('#cartCount').textContent = count;
+
+  const wishCount = email ? wishlist.filter(w=>w.email===email).length : 0;
+  qs('#wishCount').textContent = wishCount;
+
+  renderAuthArea();
+  renderCart();
+  renderOrders();
+  renderWishlistView();
+  renderReviews();
+}
+
+function renderAuthArea(){
+  const session = LS.get('session');
+  const authArea = qs('#authArea');
+  if (session){
+    const users = LS.get('users')||[];
+    const user = users.find(u=>u.email===session);
+    authArea.innerHTML = `
+      <div class="btn-group">
+        <button class="btn btn-light btn-sm dropdown-toggle" data-bs-toggle="dropdown">
+          <i class="fa-solid fa-user"></i> ${user ? user.name.split(' ')[0] : 'User'}
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+          <li><a class="dropdown-item" href="#ordersSection" id="viewOrdersLink">Orders & Wishlist</a></li>
+          <li><a class="dropdown-item" href="#" id="logoutBtn">Logout</a></li>
+        </ul>
+      </div>`;
+      qs('#logoutBtn').addEventListener('click', ()=>{ LS.set('session', null); updateCounts(); });
+  } else {
+    authArea.innerHTML = <button id="openLogin" class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#authModal">Login / Register</button>;
+    const btn = qs('#openLogin');
+    if (btn) btn.addEventListener('click', ()=>{/* show modal by bootstrap attribute */});
+  }
+}
+
+/* ---------- CART / WISHLIST / ORDERS ---------- */
+
+function addToCart(productId, qty=1){
+  const session = LS.get('session');
+  if (!session){
+    // open modal to login
+    const modalEl = document.getElementById('authModal');
+    if (modalEl){
+      const modal = new bootstrap.Modal(modalEl);
+      modal.show();
+    }
+    return;
+  }
+  let cart = LS.get('cart') || [];
+  let entry = cart.find(c=>c.email===session);
+  if (!entry){ entry = { email: session, items: []}; cart.push(entry); }
+  const item = entry.items.find(x=>x.productId===productId);
+  if (item) item.qty += qty; else entry.items.push({ productId, qty });
+  LS.set('cart', cart);
+  updateCounts();
+  showToast('Added to cart');
+}
+
+function renderCart(){
+  const session = LS.get('session');
+  const cartList = qs('#cartList');
+  cartList.innerHTML = '';
+  let total = 0;
+  if (!session) { cartList.innerHTML = '<li class="list-group-item">Your cart is empty. Login to add items.</li>'; qs('#cartTotal').textContent='₹0'; return; }
+  const cart = LS.get('cart') || [];
+  const entry = cart.find(c=>c.email===session);
+  if (!entry || entry.items.length===0) { cartList.innerHTML = '<li class="list-group-item">Cart is empty</li>'; qs('#cartTotal').textContent='₹0'; return; }
+
+  entry.items.forEach(i=>{
+    const p = PRODUCTS.find(x=>x.id===i.productId);
+    const li = document.createElement('li');
+    li.className = 'list-group-item d-flex justify-content-between align-items-center';
+    li.innerHTML = `
+      <div>
+        <div class="small text-muted">${p.title}</div>
+        <div>₹${p.price.toLocaleString()} × ${i.qty}</div>
+      </div>
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary me-1 dec-item" data-id="${p.id}">-</button>
+        <button class="btn btn-outline-secondary inc-item" data-id="${p.id}">+</button>
+        <button class="btn btn-outline-danger remove-item" data-id="${p.id}"><i class="fa-solid fa-trash"></i></button>
+      </div>
+    `;
+    cartList.appendChild(li);
+    total += p.price * i.qty;
+  });
+
+  qs('#cartTotal').textContent = ₹${total.toLocaleString()};
+
+  qsa('.inc-item').forEach(b=>b.addEventListener('click', e=>{
+    changeQty(e.currentTarget.dataset.id, +1);
+  }));
+  qsa('.dec-item').forEach(b=>b.addEventListener('click', e=>{
+    changeQty(e.currentTarget.dataset.id, -1);
+  }));
+  qsa('.remove-item').forEach(b=>b.addEventListener('click', e=>{
+    removeFromCart(e.currentTarget.dataset.id);
+  }));
+}
+
+function changeQty(pid, delta){
+  const session = LS.get('session');
+  if (!session) return;
+  let cart = LS.get('cart');
+  const entry = cart.find(c=>c.email===session);
+  if (!entry) return;
+  const item = entry.items.find(i=>i.productId===pid);
+  if (!item) return;
+  item.qty += delta;
+  if (item.qty <= 0) entry.items = entry.items.filter(i=>i.productId!==pid);
+  LS.set('cart', cart);
+  renderCart();
+  updateCounts();
+}
+
+function removeFromCart(pid){
+  const session = LS.get('session');
+  let cart = LS.get('cart');
+  const entry = cart.find(c=>c.email===session);
+  if (!entry) return;
+  entry.items = entry.items.filter(i=>i.productId!==pid);
+  LS.set('cart', cart);
+  renderCart(); updateCounts();
+}
+
+qs('#placeOrderBtn')?.addEventListener('click', ()=>{
+  const session = LS.get('session');
+  if (!session) return alert('Please login to place order.');
+  let cart = LS.get('cart');
+  const entry = cart.find(c=>c.email===session);
+  if (!entry || entry.items.length===0) return alert('Cart is empty.');
+  const orders = LS.get('orders') || [];
+  const order = {
+    id: 'ord_' + Date.now(),
+    items: entry.items,
+    total: entry.items.reduce((s,i)=> s + PRODUCTS.find(p=>p.id===i.productId).price * i.qty, 0),
+    date: new Date().toISOString()
+  };
+  orders.push({ email: session, order });
+  LS.set('orders', orders);
+  // clear user's cart
+  entry.items = [];
+  LS.set('cart', cart);
+  renderCart(); updateCounts(); renderOrders();
+  showToast('Order placed successfully');
+});
+
+/* Wishlist */
+function toggleWishlist(productId){
+  const session = LS.get('session');
+  if (!session) {
+    const modalEl = document.getElementById('authModal');
+    new bootstrap.Modal(modalEl).show();
+    return;
+  }
+  let wishlist = LS.get('wishlist') || [];
+  const exists = wishlist.find(w=>w.email===session && w.productId===productId);
+  if (exists) {
+    wishlist = wishlist.filter(w=> !(w.email===session && w.productId===productId) );
+    showToast('Removed from wishlist');
+  } else {
+    wishlist.push({ email: session, productId });
+    showToast('Added to wishlist');
+  }
+  LS.set('wishlist', wishlist);
+  updateCounts(); renderWishlistView();
+}
+
+function renderWishlistView(){
+  const list = qs('#wishListView');
+  list.innerHTML = '';
+  const session = LS.get('session');
+  if (!session){ list.innerHTML = '<li class="list-group-item">Login to see wishlist.</li>'; return; }
+  const wishlist = LS.get('wishlist') || [];
+  const items = wishlist.filter(w=>w.email===session);
+  if (items.length===0) { list.innerHTML = '<li class="list-group-item">Your wishlist is empty.</li>'; return; }
+  items.forEach(w=>{
+    const p = PRODUCTS.find(pp=>pp.id===w.productId);
+    const li = document.createElement('li');
+    li.className = 'list-group-item d-flex justify-content-between align-items-center';
+    li.innerHTML = `<div>${p.title}<div class="small text-muted">₹${p.price.toLocaleString()}</div></div>
+      <div><button class="btn btn-sm btn-primary add-cart-from-wish" data-id="${p.id}">Add to cart</button>
+      <button class="btn btn-sm btn-danger remove-wish" data-id="${p.id}"><i class="fa-solid fa-trash"></i></button></div>`;
+    list.appendChild(li);
+  });
+  qsa('.add-cart-from-wish').forEach(b=>b.addEventListener('click', e=>{
+    addToCart(e.currentTarget.dataset.id,1);
+  }));
+  qsa('.remove-wish').forEach(b=>b.addEventListener('click', e=>{
+    const id = e.currentTarget.dataset.id;
+    let wishlist = LS.get('wishlist') || [];
+    const session = LS.get('session');
+    wishlist = wishlist.filter(w => !(w.productId===id && w.email===session));
+    LS.set('wishlist', wishlist);
+    updateCounts(); renderWishlistView();
+  }));
+}
+
+/* Orders */
+function renderOrders(){
+  const el = qs('#orderList');
+  el.innerHTML = '';
+  const session = LS.get('session');
+  if (!session){ el.innerHTML = '<li class="list-group-item">Login to view orders.</li>'; return; }
+  const orders = LS.get('orders') || [];
+  const my = orders.filter(o=>o.email===session);
+  if (my.length===0) { el.innerHTML = '<li class="list-group-item">No orders yet.</li>'; return; }
+  my.forEach(o=>{
+    const li = document.createElement('li');
+    li.className = 'list-group-item';
+    li.innerHTML = `<div class="d-flex justify-content-between"><div>Order <strong>${o.order.id}</strong></div><div>${new Date(o.order.date).toLocaleString()}</div></div>
+      <div class="small text-muted">Items: ${o.order.items.length} — Total ₹${o.order.total.toLocaleString()}</div>`;
+    el.appendChild(li);
+  });
+}
+
+/* Reviews */
+qs('#reviewForm')?.addEventListener('submit', (ev)=>{
+  ev.preventDefault();
+  const txt = qs('#reviewText').value.trim();
+  if (!txt) return alert('Write something first.');
+  const reviews = LS.get('reviews') || [];
+  const name = LS.get('session') ? (LS.get('users')||[]).find(u=>u.email===LS.get('session')).name : 'Guest';
+  reviews.unshift({ name, text: txt, date: new Date().toISOString() });
+  LS.set('reviews', reviews);
+  qs('#reviewText').value = '';
+  renderReviews();
+  showToast('Thanks for your review!');
+});
+
+function renderReviews(){
+  const list = qs('#reviewList');
+  list.innerHTML = '';
+  const reviews = LS.get('reviews') || [];
+  reviews.slice(0,10).forEach(r=>{
+    const li = document.createElement('li');
+    li.className = 'list-group-item';
+    li.innerHTML = <strong>${r.name}</strong> <div class="small text-muted">${new Date(r.date).toLocaleString()}</div><p class="mb-0">${r.text}</p>;
+    list.appendChild(li);
+  });
+}
+
+/* Reports */
+qs('#reportForm')?.addEventListener('submit', (ev)=>{
+  ev.preventDefault();
+  const name = qs('#repName').value.trim();
+  const email = qs('#repEmail').value.trim();
+  const type = qs('#repType').value;
+  const msg = qs('#repMsg').value.trim();
+  if (!name || !email || !type || !msg) return alert('Please fill all fields.');
+  const reports = LS.get('reports') || [];
+  reports.push({ name, email, type, msg, date: new Date().toISOString() });
+  LS.set('reports', reports);
+  qs('#repStatus').textContent = 'Report submitted — our team will contact you.';
+  setTimeout(()=> qs('#repStatus').textContent = '', 4000);
+  qs('#repName').value=''; qs('#repEmail').value=''; qs('#repMsg').value=''; qs('#repType').value='';
+});
+
+/* ---------- AUTH (Register / Login) ---------- */
+
+qs('#registerForm')?.addEventListener('submit', (ev)=>{
+  ev.preventDefault();
+  const name = qs('#regName').value.trim();
+  const email = qs('#regEmail').value.trim().toLowerCase();
+  const password = qs('#regPassword').value;
+  if (!name || !email || !password) return alert('Fill all fields.');
+  if (password.length < 6) return alert('Password must be at least 6 characters.');
+  let users = LS.get('users') || [];
+  if (users.find(u=>u.email === email)) return alert('Email already registered. Please login.');
+  users.push({ name, email, password });
+  LS.set('users', users);
+  LS.set('session', email); // auto login
+  // close modal
+  bootstrap.Modal.getInstance(document.getElementById('authModal')).hide();
+  renderAuthArea();
+  updateCounts();
+  qs('#registerForm').reset();
+  showToast('Registration successful — you are logged in.');
+});
+
+qs('#loginForm')?.addEventListener('submit', (ev)=>{
+  ev.preventDefault();
+  const email = qs('#loginEmail').value.trim().toLowerCase();
+  const password = qs('#loginPassword').value;
+  const users = LS.get('users') || [];
+  const user = users.find(u=>u.email===email && u.password===password);
+  if (!user) return alert('Invalid credentials.');
+  LS.set('session', email);
+  bootstrap.Modal.getInstance(document.getElementById('authModal')).hide();
+  renderAuthArea();
+  updateCounts();
+  qs('#loginForm').reset();
+  showToast('Logged in successfully.');
+});
+
+/* ---------- tiny toast (bootstrap) ---------- */
+function showToast(msg){
+  // quick unobtrusive message using native alert fallback
+  try {
+    const toast = document.createElement('div');
+    toast.className = 'toast align-items-center text-bg-dark border-0 show';
+    toast.style.position = 'fixed';
+    toast.style.right = '18px';
+    toast.style.bottom = '18px';
+    toast.style.zIndex = 9999;
+    toast.innerHTML = `<div class="d-flex"><div class="toast-body">${msg}</div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" aria-label="Close"></button></div>`;
+    document.body.appendChild(toast);
+    toast.querySelector('.btn-close').addEventListener('click', ()=> toast.remove());
+    setTimeout(()=> toast.remove(), 2200);
+  } catch(e){
+    alert(msg);
+  }
+}
+
+/* ---------- interactions ---------- */
+qs('#sortSelect')?.addEventListener('change', (e)=> renderProducts(e.target.value));
+
+/* initial render */
+renderProducts();
+updateCounts();
+renderReviews();
+renderOrders();
+renderWishlistView();
+renderCart();
