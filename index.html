@@ -28,7 +28,8 @@ const qsa = sel => Array.from(document.querySelectorAll(sel));
 /* ---------- UI Rendering ---------- */
 
 function renderProducts(sort='default'){
-  let grid = qs('#productGrid');
+  const grid = qs('#productGrid');
+  if (!grid) return;
   grid.innerHTML = '';
   let list = [...PRODUCTS];
   if (sort === 'low') list.sort((a,b)=>a.price-b.price);
@@ -56,7 +57,7 @@ function renderProducts(sort='default'){
     grid.appendChild(col);
   });
 
-  // attach handlers
+  // attach handlers (re-query because we re-rendered DOM)
   qsa('.add-cart').forEach(b=>b.addEventListener('click', e=>{
     const id = e.currentTarget.dataset.id;
     addToCart(id);
@@ -75,10 +76,12 @@ function updateCounts(){
   const email = session;
   const userCart = email ? (cart.find(c=>c.email===email)?.items||[]) : [];
   const count = userCart.reduce((s,i)=>s+i.qty,0);
-  qs('#cartCount').textContent = count;
+  const cartCountEl = qs('#cartCount');
+  if (cartCountEl) cartCountEl.textContent = count;
 
   const wishCount = email ? wishlist.filter(w=>w.email===email).length : 0;
-  qs('#wishCount').textContent = wishCount;
+  const wishCountEl = qs('#wishCount');
+  if (wishCountEl) wishCountEl.textContent = wishCount;
 
   renderAuthArea();
   renderCart();
@@ -90,6 +93,8 @@ function updateCounts(){
 function renderAuthArea(){
   const session = LS.get('session');
   const authArea = qs('#authArea');
+  if (!authArea) return;
+
   if (session){
     const users = LS.get('users')||[];
     const user = users.find(u=>u.email===session);
@@ -103,11 +108,18 @@ function renderAuthArea(){
           <li><a class="dropdown-item" href="#" id="logoutBtn">Logout</a></li>
         </ul>
       </div>`;
-      qs('#logoutBtn').addEventListener('click', ()=>{ LS.set('session', null); updateCounts(); });
+    // attach logout handler
+    const logoutBtn = qs('#logoutBtn');
+    if (logoutBtn) logoutBtn.addEventListener('click', (e)=>{
+      e.preventDefault();
+      LS.set('session', null);
+      updateCounts();
+      showToast('Logged out');
+    });
   } else {
-    authArea.innerHTML = <button id="openLogin" class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#authModal">Login / Register</button>;
+    authArea.innerHTML = `<button id="openLogin" class="btn btn-outline-light btn-sm" data-bs-toggle="modal" data-bs-target="#authModal">Login / Register</button>`;
     const btn = qs('#openLogin');
-    if (btn) btn.addEventListener('click', ()=>{/* show modal by bootstrap attribute */});
+    if (btn) btn.addEventListener('click', ()=>{/* modal handled by bootstrap attributes */});
   }
 }
 
@@ -118,9 +130,11 @@ function addToCart(productId, qty=1){
   if (!session){
     // open modal to login
     const modalEl = document.getElementById('authModal');
-    if (modalEl){
+    if (modalEl && typeof bootstrap !== 'undefined'){
       const modal = new bootstrap.Modal(modalEl);
       modal.show();
+    } else {
+      alert('Please login to add items to cart.');
     }
     return;
   }
@@ -137,15 +151,17 @@ function addToCart(productId, qty=1){
 function renderCart(){
   const session = LS.get('session');
   const cartList = qs('#cartList');
+  if (!cartList) return;
   cartList.innerHTML = '';
   let total = 0;
-  if (!session) { cartList.innerHTML = '<li class="list-group-item">Your cart is empty. Login to add items.</li>'; qs('#cartTotal').textContent='₹0'; return; }
+  if (!session) { cartList.innerHTML = '<li class="list-group-item">Your cart is empty. Login to add items.</li>'; const ct = qs('#cartTotal'); if (ct) ct.textContent='₹0'; return; }
   const cart = LS.get('cart') || [];
   const entry = cart.find(c=>c.email===session);
-  if (!entry || entry.items.length===0) { cartList.innerHTML = '<li class="list-group-item">Cart is empty</li>'; qs('#cartTotal').textContent='₹0'; return; }
+  if (!entry || entry.items.length===0) { cartList.innerHTML = '<li class="list-group-item">Cart is empty</li>'; const ct = qs('#cartTotal'); if (ct) ct.textContent='₹0'; return; }
 
   entry.items.forEach(i=>{
     const p = PRODUCTS.find(x=>x.id===i.productId);
+    if (!p) return;
     const li = document.createElement('li');
     li.className = 'list-group-item d-flex justify-content-between align-items-center';
     li.innerHTML = `
@@ -163,7 +179,8 @@ function renderCart(){
     total += p.price * i.qty;
   });
 
-  qs('#cartTotal').textContent = ₹${total.toLocaleString()};
+  const cartTotalEl = qs('#cartTotal');
+  if (cartTotalEl) cartTotalEl.textContent = `₹${total.toLocaleString()}`;
 
   qsa('.inc-item').forEach(b=>b.addEventListener('click', e=>{
     changeQty(e.currentTarget.dataset.id, +1);
@@ -179,7 +196,7 @@ function renderCart(){
 function changeQty(pid, delta){
   const session = LS.get('session');
   if (!session) return;
-  let cart = LS.get('cart');
+  let cart = LS.get('cart') || [];
   const entry = cart.find(c=>c.email===session);
   if (!entry) return;
   const item = entry.items.find(i=>i.productId===pid);
@@ -193,7 +210,7 @@ function changeQty(pid, delta){
 
 function removeFromCart(pid){
   const session = LS.get('session');
-  let cart = LS.get('cart');
+  let cart = LS.get('cart') || [];
   const entry = cart.find(c=>c.email===session);
   if (!entry) return;
   entry.items = entry.items.filter(i=>i.productId!==pid);
@@ -201,17 +218,18 @@ function removeFromCart(pid){
   renderCart(); updateCounts();
 }
 
+// place order button (guarded)
 qs('#placeOrderBtn')?.addEventListener('click', ()=>{
   const session = LS.get('session');
   if (!session) return alert('Please login to place order.');
-  let cart = LS.get('cart');
+  let cart = LS.get('cart') || [];
   const entry = cart.find(c=>c.email===session);
   if (!entry || entry.items.length===0) return alert('Cart is empty.');
   const orders = LS.get('orders') || [];
   const order = {
     id: 'ord_' + Date.now(),
     items: entry.items,
-    total: entry.items.reduce((s,i)=> s + PRODUCTS.find(p=>p.id===i.productId).price * i.qty, 0),
+    total: entry.items.reduce((s,i)=> s + (PRODUCTS.find(p=>p.id===i.productId)?.price || 0) * i.qty, 0),
     date: new Date().toISOString()
   };
   orders.push({ email: session, order });
@@ -228,7 +246,11 @@ function toggleWishlist(productId){
   const session = LS.get('session');
   if (!session) {
     const modalEl = document.getElementById('authModal');
-    new bootstrap.Modal(modalEl).show();
+    if (modalEl && typeof bootstrap !== 'undefined'){
+      new bootstrap.Modal(modalEl).show();
+    } else {
+      alert('Please login to use wishlist.');
+    }
     return;
   }
   let wishlist = LS.get('wishlist') || [];
@@ -246,6 +268,7 @@ function toggleWishlist(productId){
 
 function renderWishlistView(){
   const list = qs('#wishListView');
+  if (!list) return;
   list.innerHTML = '';
   const session = LS.get('session');
   if (!session){ list.innerHTML = '<li class="list-group-item">Login to see wishlist.</li>'; return; }
@@ -254,11 +277,14 @@ function renderWishlistView(){
   if (items.length===0) { list.innerHTML = '<li class="list-group-item">Your wishlist is empty.</li>'; return; }
   items.forEach(w=>{
     const p = PRODUCTS.find(pp=>pp.id===w.productId);
+    if (!p) return;
     const li = document.createElement('li');
     li.className = 'list-group-item d-flex justify-content-between align-items-center';
     li.innerHTML = `<div>${p.title}<div class="small text-muted">₹${p.price.toLocaleString()}</div></div>
-      <div><button class="btn btn-sm btn-primary add-cart-from-wish" data-id="${p.id}">Add to cart</button>
-      <button class="btn btn-sm btn-danger remove-wish" data-id="${p.id}"><i class="fa-solid fa-trash"></i></button></div>`;
+      <div>
+        <button class="btn btn-sm btn-primary add-cart-from-wish" data-id="${p.id}">Add to cart</button>
+        <button class="btn btn-sm btn-danger remove-wish" data-id="${p.id}"><i class="fa-solid fa-trash"></i></button>
+      </div>`;
     list.appendChild(li);
   });
   qsa('.add-cart-from-wish').forEach(b=>b.addEventListener('click', e=>{
@@ -277,6 +303,7 @@ function renderWishlistView(){
 /* Orders */
 function renderOrders(){
   const el = qs('#orderList');
+  if (!el) return;
   el.innerHTML = '';
   const session = LS.get('session');
   if (!session){ el.innerHTML = '<li class="list-group-item">Login to view orders.</li>'; return; }
@@ -295,25 +322,27 @@ function renderOrders(){
 /* Reviews */
 qs('#reviewForm')?.addEventListener('submit', (ev)=>{
   ev.preventDefault();
-  const txt = qs('#reviewText').value.trim();
+  const txtEl = qs('#reviewText');
+  const txt = txtEl ? txtEl.value.trim() : '';
   if (!txt) return alert('Write something first.');
   const reviews = LS.get('reviews') || [];
   const name = LS.get('session') ? (LS.get('users')||[]).find(u=>u.email===LS.get('session')).name : 'Guest';
   reviews.unshift({ name, text: txt, date: new Date().toISOString() });
   LS.set('reviews', reviews);
-  qs('#reviewText').value = '';
+  if (txtEl) txtEl.value = '';
   renderReviews();
   showToast('Thanks for your review!');
 });
 
 function renderReviews(){
   const list = qs('#reviewList');
+  if (!list) return;
   list.innerHTML = '';
   const reviews = LS.get('reviews') || [];
   reviews.slice(0,10).forEach(r=>{
     const li = document.createElement('li');
     li.className = 'list-group-item';
-    li.innerHTML = <strong>${r.name}</strong> <div class="small text-muted">${new Date(r.date).toLocaleString()}</div><p class="mb-0">${r.text}</p>;
+    li.innerHTML = `<strong>${r.name}</strong> <div class="small text-muted">${new Date(r.date).toLocaleString()}</div><p class="mb-0">${r.text}</p>`;
     list.appendChild(li);
   });
 }
@@ -321,26 +350,30 @@ function renderReviews(){
 /* Reports */
 qs('#reportForm')?.addEventListener('submit', (ev)=>{
   ev.preventDefault();
-  const name = qs('#repName').value.trim();
-  const email = qs('#repEmail').value.trim();
-  const type = qs('#repType').value;
-  const msg = qs('#repMsg').value.trim();
+  const name = qs('#repName')?.value.trim() || '';
+  const email = qs('#repEmail')?.value.trim() || '';
+  const type = qs('#repType')?.value || '';
+  const msg = qs('#repMsg')?.value.trim() || '';
   if (!name || !email || !type || !msg) return alert('Please fill all fields.');
   const reports = LS.get('reports') || [];
   reports.push({ name, email, type, msg, date: new Date().toISOString() });
   LS.set('reports', reports);
-  qs('#repStatus').textContent = 'Report submitted — our team will contact you.';
-  setTimeout(()=> qs('#repStatus').textContent = '', 4000);
-  qs('#repName').value=''; qs('#repEmail').value=''; qs('#repMsg').value=''; qs('#repType').value='';
+  const status = qs('#repStatus');
+  if (status) status.textContent = 'Report submitted — our team will contact you.';
+  setTimeout(()=> { if (status) status.textContent = ''; }, 4000);
+  if (qs('#repName')) qs('#repName').value='';
+  if (qs('#repEmail')) qs('#repEmail').value='';
+  if (qs('#repMsg')) qs('#repMsg').value='';
+  if (qs('#repType')) qs('#repType').value='';
 });
 
 /* ---------- AUTH (Register / Login) ---------- */
 
 qs('#registerForm')?.addEventListener('submit', (ev)=>{
   ev.preventDefault();
-  const name = qs('#regName').value.trim();
-  const email = qs('#regEmail').value.trim().toLowerCase();
-  const password = qs('#regPassword').value;
+  const name = qs('#regName')?.value.trim() || '';
+  const email = qs('#regEmail')?.value.trim().toLowerCase() || '';
+  const password = qs('#regPassword')?.value || '';
   if (!name || !email || !password) return alert('Fill all fields.');
   if (password.length < 6) return alert('Password must be at least 6 characters.');
   let users = LS.get('users') || [];
@@ -348,26 +381,32 @@ qs('#registerForm')?.addEventListener('submit', (ev)=>{
   users.push({ name, email, password });
   LS.set('users', users);
   LS.set('session', email); // auto login
-  // close modal
-  bootstrap.Modal.getInstance(document.getElementById('authModal')).hide();
+  // close modal if bootstrap present
+  const modalEl = document.getElementById('authModal');
+  if (modalEl && typeof bootstrap !== 'undefined') {
+    bootstrap.Modal.getInstance(modalEl)?.hide();
+  }
   renderAuthArea();
   updateCounts();
-  qs('#registerForm').reset();
+  qs('#registerForm')?.reset();
   showToast('Registration successful — you are logged in.');
 });
 
 qs('#loginForm')?.addEventListener('submit', (ev)=>{
   ev.preventDefault();
-  const email = qs('#loginEmail').value.trim().toLowerCase();
-  const password = qs('#loginPassword').value;
+  const email = qs('#loginEmail')?.value.trim().toLowerCase() || '';
+  const password = qs('#loginPassword')?.value || '';
   const users = LS.get('users') || [];
   const user = users.find(u=>u.email===email && u.password===password);
   if (!user) return alert('Invalid credentials.');
   LS.set('session', email);
-  bootstrap.Modal.getInstance(document.getElementById('authModal')).hide();
+  const modalEl = document.getElementById('authModal');
+  if (modalEl && typeof bootstrap !== 'undefined') {
+    bootstrap.Modal.getInstance(modalEl)?.hide();
+  }
   renderAuthArea();
   updateCounts();
-  qs('#loginForm').reset();
+  qs('#loginForm')?.reset();
   showToast('Logged in successfully.');
 });
 
@@ -397,7 +436,3 @@ qs('#sortSelect')?.addEventListener('change', (e)=> renderProducts(e.target.valu
 /* initial render */
 renderProducts();
 updateCounts();
-renderReviews();
-renderOrders();
-renderWishlistView();
-renderCart();
